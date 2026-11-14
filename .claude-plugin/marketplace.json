@@ -1,0 +1,5 @@
+{
+  "name": "ladysi-theme",
+  "owner": { "name": "yuezhix" },
+  "plugins": [{ "name": "ladysi", "source": "./" }]
+}
