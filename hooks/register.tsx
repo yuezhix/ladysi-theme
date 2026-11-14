@@ -5,7 +5,7 @@ import { AUTUMN_IMAGE, FACE_IMAGE, LINE_IMAGE, NAME_IMAGE, PANE_IMAGE } from './
 import { autumnCells, faceCells, looksGraphical, paneCells, paneRows } from './terminal'
 
 // The terminal band's height in rows.
-const BAND_ROWS = 10
+const BAND_ROWS = 14
 
 const PANE = 'ladysi-pane'
 const LINE = '管理员，这次要答应我哦'
@@ -366,7 +366,7 @@ export const register: Register = on => {
     if (e.surface === 'terminal' && 'Raster' in ui && 'Image' in ui) {
       const { Box, Text, Raster, Image } = ui
       const working = e.props.isWorking
-      // 10 rows where the band has room, 8 at least.
+      // 14 rows where the band has room, 8 at least.
       const faceRows = Math.min(BAND_ROWS, e.props.maxRows)
       const faceColumns = faceRows * 2
       // Too little room for the picture row: one line of text instead.
@@ -378,7 +378,7 @@ export const register: Register = on => {
           </Text>
         )
       }
-      const stripColumns = Math.min(96, e.props.bodyColumns - faceColumns - 2)
+      const stripColumns = Math.min(128,e.props.bodyColumns - faceColumns - 2)
       const stripRows = faceRows - 2
       const png = useImages() ? await loadPngs($) : undefined
       return (
@@ -399,13 +399,20 @@ export const register: Register = on => {
             ) : (
               <Raster key="strip" columns={stripColumns} rows={stripRows} cells={autumnCells(stripColumns, stripRows)} />
             )}
-            <Text>
-              <Text bold color={RED}>祀</Text>
-              <Text color={TEAL}>  {LINE}</Text>
-            </Text>
-            <Text color={TEAL} dimColor={!working}>
-              {working ? '◐ 落笔中……' : '🍁 LadySi'}
-            </Text>
+            {/* A fixed-width mark column keeps 祀 and the leaf, and the words after
+                them, in line whatever width the terminal gives the leaf. */}
+            <Box flexDirection="row">
+              <Box width={4} flexDirection="column">
+                <Text bold color={RED}>祀</Text>
+                <Text color={working ? TEAL : RED}>{working ? '◐' : '🍁'}</Text>
+              </Box>
+              <Box flexDirection="column">
+                <Text color={TEAL}>{LINE}</Text>
+                <Text color={TEAL} dimColor={!working}>
+                  {working ? '落笔中……' : 'LadySi'}
+                </Text>
+              </Box>
+            </Box>
           </Box>
         </Box>
       )

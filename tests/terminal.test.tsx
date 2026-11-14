@@ -34,11 +34,18 @@ test('the terminal band draws the portrait and the autumn strip as cells', async
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   const face = await ui.find({ key: 'face' })
   expect(face?.type).toBe('Raster')
-  expect(cellCount(face?.props.cells)).toBe(20 * 10)
+  expect(cellCount(face?.props.cells)).toBe(28 * 14)
   const strip = await ui.find({ key: 'strip' })
   expect(strip?.type).toBe('Raster')
   expect(cellCount(strip?.props.cells)).toBe(Number(strip?.props.columns) * Number(strip?.props.rows))
   expect(await ui.find({ type: 'Text', text: /管理员/ })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: /^LadySi$/ })).toBeDefined()
+  await ui.unmount()
+})
+
+test('a band with less room shrinks to fit', async $ => {
+  const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, maxRows: 11 }, surface: 'terminal' })
+  expect((await ui.find({ key: 'face' }))?.props.rows).toBe(11)
   await ui.unmount()
 })
 
