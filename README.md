@@ -39,7 +39,7 @@ The terminal has no SVG, so the mod draws its own versions there:
 
 - **Band above the prompt:** the round portrait, an autumn strip with the two figures, and the line. The frame turns teal and the band shows 落笔中…… while Claude works. On a short terminal it shrinks to one line.
 - **Pane:** `/ladysi pane` shows the wallpaper at the pane's width.
-- **Pictures:** kitty, Ghostty and iTerm2 3.5+ (with fullscreen rendering) show the real pictures. All other terminals, Windows Terminal included, show colored half-block cell drawings. Use `/ladysi image on` or `off` to override the choice.
+- **Pictures:** kitty, Ghostty and iTerm2 3.5+ (with fullscreen rendering) show the real pictures. All other terminals, Windows Terminal included, show colored quadrant-block cell drawings (2 x 2 pixels a cell). Use `/ladysi image on` or `off` to override the choice.
 
 ## Credits
 

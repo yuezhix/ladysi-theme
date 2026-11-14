@@ -34,7 +34,7 @@ test('the terminal band draws the portrait and the autumn strip as cells', async
   const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
   const face = await ui.find({ key: 'face' })
   expect(face?.type).toBe('Raster')
-  expect(cellCount(face?.props.cells)).toBe(16 * 8)
+  expect(cellCount(face?.props.cells)).toBe(20 * 10)
   const strip = await ui.find({ key: 'strip' })
   expect(strip?.type).toBe('Raster')
   expect(cellCount(strip?.props.cells)).toBe(Number(strip?.props.columns) * Number(strip?.props.rows))

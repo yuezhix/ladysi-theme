@@ -2,7 +2,10 @@ import type { Register, ThemeResult, ThemeSetArgs } from 'claude-code'
 
 import { makeColors } from './make-colors.js'
 import { AUTUMN_IMAGE, FACE_IMAGE, LINE_IMAGE, NAME_IMAGE, PANE_IMAGE } from './pane-image'
-import { FACE_SIZE, autumnCells, faceCells, looksGraphical, paneCells, paneRows } from './terminal'
+import { autumnCells, faceCells, looksGraphical, paneCells, paneRows } from './terminal'
+
+// The terminal band's height in rows.
+const BAND_ROWS = 10
 
 const PANE = 'ladysi-pane'
 const LINE = '管理员，这次要答应我哦'
@@ -363,9 +366,11 @@ export const register: Register = on => {
     if (e.surface === 'terminal' && 'Raster' in ui && 'Image' in ui) {
       const { Box, Text, Raster, Image } = ui
       const working = e.props.isWorking
-      const faceRows = FACE_SIZE / 2
+      // 10 rows where the band has room, 8 at least.
+      const faceRows = Math.min(BAND_ROWS, e.props.maxRows)
+      const faceColumns = faceRows * 2
       // Too little room for the picture row: one line of text instead.
-      if (e.props.maxRows < faceRows || e.props.bodyColumns < FACE_SIZE + 24) {
+      if (faceRows < 8 || e.props.bodyColumns < faceColumns + 24) {
         return (
           <Text color={working ? TEAL : undefined}>
             {working ? '◐ ' : '✦ '}
@@ -373,15 +378,20 @@ export const register: Register = on => {
           </Text>
         )
       }
-      const stripColumns = Math.min(72, e.props.bodyColumns - FACE_SIZE - 2)
+      const stripColumns = Math.min(96, e.props.bodyColumns - faceColumns - 2)
       const stripRows = faceRows - 2
       const png = useImages() ? await loadPngs($) : undefined
       return (
         <Box flexDirection="row" columnGap={2}>
           {png ? (
-            <Image key="face" source={{ png: png.face }} columns={FACE_SIZE} rows={faceRows} alt="祀" />
+            <Image key="face" source={{ png: png.face }} columns={faceColumns} rows={faceRows} alt="祀" />
           ) : (
-            <Raster key="face" columns={FACE_SIZE} rows={faceRows} cells={faceCells(hex(working ? TEAL : INK))} />
+            <Raster
+              key="face"
+              columns={faceColumns}
+              rows={faceRows}
+              cells={faceCells(faceRows, hex(working ? TEAL : INK))}
+            />
           )}
           <Box flexDirection="column">
             {png ? (

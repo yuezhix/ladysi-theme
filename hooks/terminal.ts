@@ -18,9 +18,72 @@ type Pixels = { width: number; height: number; bytes: Uint8Array }
 
 // 0x01000000 is "the terminal's own color" in a Raster cell.
 export const DEFAULT = 0x01000000
-const UPPER = 0x2580 // ▀
-const LOWER = 0x2584 // ▄
 const SPACE = 0x20
+
+// Quadrant blocks: a cell is 2 x 2 pixels in two colors. The index is which
+// quadrants take the foreground: top-left 1, top-right 2, bottom-left 4, bottom-right 8.
+const QUADRANT = [
+  SPACE, 0x2598, 0x259d, 0x2580, 0x2596, 0x258c, 0x259e, 0x259b,
+  0x2597, 0x259a, 0x2590, 0x259c, 0x2584, 0x2599, 0x259f, 0x2588,
+]
+
+const channels = (c: number): [number, number, number] => [(c >> 16) & 255, (c >> 8) & 255, c & 255]
+const join = (r: number, g: number, b: number): number =>
+  (Math.round(r) << 16) | (Math.round(g) << 8) | Math.round(b)
+
+// The best two colors for four pixels, and which pixels take the first.
+const fit = (px: readonly number[]): [glyph: number, fg: number, bg: number] => {
+  const blank = px.map(c => c === DEFAULT)
+  if (blank.every(Boolean)) return [SPACE, DEFAULT, DEFAULT]
+  if (blank.some(Boolean)) {
+    // The blank part keeps the terminal's color; the rest is their average.
+    let mask = 0
+    let r = 0
+    let g = 0
+    let b = 0
+    let n = 0
+    px.forEach((c, i) => {
+      if (blank[i]) return
+      mask |= 1 << i
+      const [cr, cg, cb] = channels(c)
+      r += cr
+      g += cg
+      b += cb
+      n++
+    })
+    return [QUADRANT[mask] ?? SPACE, join(r / n, g / n, b / n), DEFAULT]
+  }
+  const rgb = px.map(channels)
+  let best: [number, number, number] = [SPACE, DEFAULT, DEFAULT]
+  let bestError = Infinity
+  // Masks 1 to 15: 15 is one color for the whole cell.
+  for (let mask = 1; mask < 16; mask++) {
+    const sum = [
+      [0, 0, 0, 0],
+      [0, 0, 0, 0],
+    ]
+    rgb.forEach(([r, g, b], i) => {
+      const s = sum[(mask >> i) & 1 ? 0 : 1]!
+      s[0]! += r
+      s[1]! += g
+      s[2]! += b
+      s[3]! += 1
+    })
+    const mean = sum.map(([r, g, b, n]) => (n ? [r! / n, g! / n, b! / n] : [0, 0, 0]))
+    let error = 0
+    rgb.forEach(([r, g, b], i) => {
+      const m = mean[(mask >> i) & 1 ? 0 : 1]!
+      error += (r - m[0]!) ** 2 + (g - m[1]!) ** 2 + (b - m[2]!) ** 2
+    })
+    if (error < bestError) {
+      bestError = error
+      const fg = join(mean[0]![0]!, mean[0]![1]!, mean[0]![2]!)
+      const bg = mask === 15 ? fg : join(mean[1]![0]!, mean[1]![1]!, mean[1]![2]!)
+      best = [QUADRANT[mask] ?? SPACE, fg, bg]
+    }
+  }
+  return best
+}
 
 const decoded = new Map<Rgb, Pixels>()
 const pixels = (src: Rgb): Pixels => {
@@ -57,24 +120,19 @@ const average = (p: Pixels, x0: number, y0: number, x1: number, y1: number): num
   return (Math.round(r / n) << 16) | (Math.round(g / n) << 8) | Math.round(b / n)
 }
 
-// A mask may replace a pixel: return a color, DEFAULT for none, or undefined to keep it.
-export type Mask = (x: number, y: number, w: number, h: number) => number | undefined
+// A mask may replace a pixel: given where the pixel's centre falls in the box
+// (0 to 1 across and down), return a color, DEFAULT for none, or undefined to keep it.
+export type Mask = (u: number, v: number) => number | undefined
 
-// Packs `columns` x `rows` cells, two pixels a cell (upper and lower half block).
-const pack = (
-  src: Rgb,
-  columns: number,
-  rows: number,
-  crop: Crop,
-  mask?: Mask,
-): string => {
+// Packs `columns` x `rows` cells, each 2 x 2 pixels in quadrant blocks.
+const pack = (src: Rgb, columns: number, rows: number, crop: Crop, mask?: Mask): string => {
   const p = pixels(src)
-  const w = columns
+  const w = columns * 2
   const h = rows * 2
   const sx = crop.w / w
   const sy = crop.h / h
   const pixel = (x: number, y: number): number => {
-    const m = mask?.(x, y, w, h)
+    const m = mask?.((x + 0.5) / w, (y + 0.5) / h)
     if (m !== undefined) return m
     const x0 = crop.x + x * sx
     const y0 = crop.y + y * sy
@@ -84,15 +142,9 @@ const pack = (
   let i = 0
   for (let row = 0; row < rows; row++) {
     for (let col = 0; col < columns; col++) {
-      const top = pixel(col, row * 2)
-      const bottom = pixel(col, row * 2 + 1)
-      if (top === DEFAULT && bottom === DEFAULT) {
-        words.set([SPACE, DEFAULT, DEFAULT], i)
-      } else if (top === DEFAULT) {
-        words.set([LOWER, bottom, DEFAULT], i)
-      } else {
-        words.set([UPPER, top, bottom], i)
-      }
+      const x = col * 2
+      const y = row * 2
+      words.set(fit([pixel(x, y), pixel(x + 1, y), pixel(x, y + 1), pixel(x + 1, y + 1)]), i)
       i += 3
     }
   }
@@ -124,13 +176,13 @@ const memo = (key: string, make: () => string): string => {
 }
 
 // The portrait in a round frame: a dark band, or a teal one while Claude works.
-export const FACE_SIZE = 16 // columns; rows are half of it
-export const faceCells = (ring: number): string =>
-  memo(`face:${ring}`, () =>
-    pack(FACE_RGB, FACE_SIZE, FACE_SIZE / 2, { x: 0, y: 0, w: FACE_RGB.width, h: FACE_RGB.height }, (x, y, w, h) => {
-      const d = Math.hypot(x + 0.5 - w / 2, y + 0.5 - h / 2)
-      if (d > w / 2) return DEFAULT
-      if (d > w / 2 - 1.1) return ring
+// A cell is about twice as tall as wide, so a square is `rows * 2` columns.
+export const faceCells = (rows: number, ring: number): string =>
+  memo(`face:${rows}:${ring}`, () =>
+    pack(FACE_RGB, rows * 2, rows, { x: 0, y: 0, w: FACE_RGB.width, h: FACE_RGB.height }, (u, v) => {
+      const d = Math.hypot(u - 0.5, v - 0.5)
+      if (d > 0.5) return DEFAULT
+      if (d > 0.5 - 0.9 / (rows * 2)) return ring
       return undefined
     }),
   )
