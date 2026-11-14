@@ -37,22 +37,26 @@ test('the terminal band draws the portrait and the autumn strip as cells', async
   expect(cellCount(face?.props.cells)).toBe(28 * 14)
   const strip = await ui.find({ key: 'strip' })
   expect(strip?.type).toBe('Raster')
-  expect(cellCount(strip?.props.cells)).toBe(Number(strip?.props.columns) * Number(strip?.props.rows))
-  expect(await ui.find({ type: 'Text', text: /管理员/ })).toBeDefined()
-  expect(await ui.find({ type: 'Text', text: /^LadySi$/ })).toBeDefined()
+  expect(strip?.props.rows).toBe(14)
+  expect(cellCount(strip?.props.cells)).toBe(Number(strip?.props.columns) * 14)
+  expect(await ui.find({ type: 'Text' })).toBeUndefined()
   await ui.unmount()
 })
 
 test('a band with less room shrinks to fit', async $ => {
   const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, maxRows: 11 }, surface: 'terminal' })
   expect((await ui.find({ key: 'face' }))?.props.rows).toBe(11)
+  expect((await ui.find({ key: 'strip' }))?.props.rows).toBe(11)
   await ui.unmount()
 })
 
-test('the terminal band says so while Claude works', async $ => {
-  const ui = await $.ui.mount({ ...BAND, props: { ...BAND.props, isWorking: true }, surface: 'terminal' })
-  expect(await ui.find({ type: 'Text', text: /落笔中/ })).toBeDefined()
-  await ui.unmount()
+test('the portrait ring changes while Claude works', async $ => {
+  const idle = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const before = (await idle.find({ key: 'face' }))?.props.cells
+  await idle.unmount()
+  const busy = await $.ui.mount({ ...BAND, props: { ...BAND.props, isWorking: true }, surface: 'terminal' })
+  expect((await busy.find({ key: 'face' }))?.props.cells).not.toBe(before)
+  await busy.unmount()
 })
 
 test('a short terminal gets one line', async $ => {

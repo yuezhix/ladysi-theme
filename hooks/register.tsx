@@ -364,7 +364,7 @@ export const register: Register = on => {
     }
     const ui = $.ui.resolve(e)
     if (e.surface === 'terminal' && 'Raster' in ui && 'Image' in ui) {
-      const { Box, Text, Raster, Image } = ui
+      const { Box, Text, Raster, Image } = ui // Text: the one-line band of a short terminal
       const working = e.props.isWorking
       // 14 rows where the band has room, 8 at least.
       const faceRows = Math.min(BAND_ROWS, e.props.maxRows)
@@ -379,7 +379,8 @@ export const register: Register = on => {
         )
       }
       const stripColumns = Math.min(128,e.props.bodyColumns - faceColumns - 2)
-      const stripRows = faceRows - 2
+      // The strip is as tall as the portrait: two pictures, no words.
+      const stripRows = faceRows
       const png = useImages() ? await loadPngs($) : undefined
       return (
         <Box flexDirection="row" columnGap={2}>
@@ -393,27 +394,11 @@ export const register: Register = on => {
               cells={faceCells(faceRows, hex(working ? TEAL : INK))}
             />
           )}
-          <Box flexDirection="column">
-            {png ? (
-              <Image key="strip" source={{ png: png.autumn }} columns={stripColumns} rows={stripRows} alt=" " />
-            ) : (
-              <Raster key="strip" columns={stripColumns} rows={stripRows} cells={autumnCells(stripColumns, stripRows)} />
-            )}
-            {/* Both marks are CJK characters in one font, so their left edges meet:
-                an emoji leaf comes from another font and sits a few pixels off. */}
-            <Box flexDirection="row">
-              <Box width={4} flexDirection="column">
-                <Text bold color={RED}>祀</Text>
-                <Text bold color={working ? TEAL : RED}>{working ? '绘' : '枫'}</Text>
-              </Box>
-              <Box flexDirection="column">
-                <Text color={TEAL}>{LINE}</Text>
-                <Text color={TEAL} dimColor={!working}>
-                  {working ? '落笔中……' : 'LadySi'}
-                </Text>
-              </Box>
-            </Box>
-          </Box>
+          {png ? (
+            <Image key="strip" source={{ png: png.autumn }} columns={stripColumns} rows={stripRows} alt=" " />
+          ) : (
+            <Raster key="strip" columns={stripColumns} rows={stripRows} cells={autumnCells(stripColumns, stripRows)} />
+          )}
         </Box>
       )
     }
