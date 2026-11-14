@@ -399,12 +399,12 @@ export const register: Register = on => {
             ) : (
               <Raster key="strip" columns={stripColumns} rows={stripRows} cells={autumnCells(stripColumns, stripRows)} />
             )}
-            {/* A fixed-width mark column keeps 祀 and the leaf, and the words after
-                them, in line whatever width the terminal gives the leaf. */}
+            {/* Both marks are CJK characters in one font, so their left edges meet:
+                an emoji leaf comes from another font and sits a few pixels off. */}
             <Box flexDirection="row">
               <Box width={4} flexDirection="column">
                 <Text bold color={RED}>祀</Text>
-                <Text color={working ? TEAL : RED}>{working ? '◐' : '🍁'}</Text>
+                <Text bold color={working ? TEAL : RED}>{working ? '绘' : '枫'}</Text>
               </Box>
               <Box flexDirection="column">
                 <Text color={TEAL}>{LINE}</Text>
