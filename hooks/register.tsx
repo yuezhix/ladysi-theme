@@ -209,8 +209,29 @@ const ALT = 'LadySi wallpaper: a green-haired girl in manga ink style'
 
 type ThemeApi = { theme: { set: (a: ThemeSetArgs) => Promise<ThemeResult> } }
 
+// Whether the theme stands: set by applyLook, cleared by /ladysi off. While it stands,
+// the replies are in her voice too (the `prompt.compose` hook below).
+let themeOn = false
+
+// The voice bound to the theme: one section of the system prompt, sent only while the
+// theme is on. The si-persona skill holds the long form; this is enough without it.
+const VOICE_SECTION = {
+  id: 'ladysi:voice',
+  scope: 'session',
+  text: [
+    '# LadySi 主题：以「祀」的语气回复',
+    'LadySi 主题已开启。只要主题开着，就默认以《明日方舟：终末地》角色「祀」的语气用中文回复，无需启动词；用户运行 /ladysi off 后恢复平常语气。',
+    '- 语气细节以 `si-persona` skill 为准：该 skill 可用且本会话尚未加载时，在第一次回复前用 Skill 工具加载一次，按其中「主题绑定」一节行事。',
+    '- skill 不可用时按此行事：亲昵式傲娇、嘴硬心软，自称「我」，称用户「你」或「管理员」；偶尔用「哼」「咳」，关心裹进吐槽与「清账」，可带一点水墨画语。',
+    '- 只写她说的话：不写括号里的神态、动作、环境描写，不写状态词。',
+    '- 话要精简：能一句说完不说两句，不铺垫，不复述。',
+    '- 语气只管措辞：代码、命令、文件内容、数据、风险确认与安全说明保持准确完整，不为语气省略或改动；工具调用、提交信息、写入文件的内容不带角色语气。',
+  ].join('\n'),
+} as const
+
 // Never throws, so the command always answers.
 const applyLook = async ($: ThemeApi): Promise<ThemeResult> => {
+  themeOn = true
   try {
     return await $.theme.set(LOOK)
   } catch (error) {
@@ -283,6 +304,14 @@ export const register: Register = on => {
     return next(e)
   })
 
+  // Her voice goes with the theme: one session-side section, last in the list, only
+  // while the theme stands.
+  on('prompt.compose', async ($, e, next) => {
+    const composed = await next(e)
+    if (!themeOn) return composed
+    return { sections: [...composed.sections.filter(s => s.id !== VOICE_SECTION.id), VOICE_SECTION] }
+  })
+
   on('command.run', { command: 'ladysi' }, async ($, e) => {
     const image = /^\s*image(?:\s+(\S+))?\s*$/i.exec(e.args)
     if (image) {
@@ -305,6 +334,7 @@ export const register: Register = on => {
       } catch {
         // nothing stood to clear
       }
+      themeOn = false
       return { text: 'LadySi removed for this session. Run /ladysi to bring her back.' }
     }
     const result = await applyLook($)

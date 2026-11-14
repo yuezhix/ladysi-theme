@@ -5,6 +5,7 @@ A Claude Code mod with a manga ink-and-sage theme. It is built around one wallpa
 - **Theme:** sage paper, teal accents, and heavy ink blacks, with the wallpaper as the backdrop.
 - **Band above the prompt:** an autumn strip with a round portrait frame, the character 祀, and falling maple leaves. A teal ring turns while Claude works.
 - **Pane:** `/ladysi pane` shows the wallpaper beside the chat. If a surface cannot draw themes, the mod opens this pane at session start.
+- **Voice:** while the theme is on, Claude replies in Chinese in the voice of 祀: her words only, kept short. `/ladysi off` returns the normal voice.
 
 ## Install
 
