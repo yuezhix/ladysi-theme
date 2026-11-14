@@ -1,7 +1,11 @@
-import type { Register, ThemeResult, ThemeSetArgs } from 'claude-code'
+import { atom, read, update } from 'claude-code'
+import type { Register, ThemeResult, ThemeSetArgs, Timer } from 'claude-code'
+import type { OpenGroups } from '../types'
 
 import { makeColors } from './make-colors.js'
-import { AUTUMN_IMAGE, FACE_IMAGE, LINE_IMAGE, NAME_IMAGE, PANE_IMAGE } from './pane-image'
+import { BACKDROP_SCENE } from './backdrop-scene'
+import { PIXEL_SI_IDLE, PIXEL_SI_WORKING } from './pixel-si'
+import { AUTUMN_IMAGE, FACE_IMAGE, LINE_IMAGE, NAME_IMAGE, PANE_IMAGE, WORKING_LINE_IMAGE } from './pane-image'
 import { autumnCells, faceCells, looksGraphical, paneCells, paneRows } from './terminal'
 
 // The terminal band's height in rows.
@@ -108,8 +112,12 @@ const FRAME = `
 <path d="M20 70 Q8 74 4 84" stroke="#3b2318" stroke-width="2" fill="none" stroke-linecap="round"/>
 ${blossom(36, 22, 1.1)}${blossom(18, 52, 1)}${blossom(8, 80, 0.9)}${blossom(22, 112, 1.05)}${blossom(42, 140, 0.95)}${blossom(146, 122, 0.9)}${blossom(156, 110, 0.75)}`
 
-const buildRow = (isWorking: boolean): string => {
+// `phase` is the seconds since the band's clock began. Every animation starts that far
+// into its cycle, so a new drawing (idle to working and back) carries the leaves, the
+// grass and the ring on from where the last one had them.
+const buildRow = (isWorking: boolean, phase = 0): string => {
   const rand = seeded(11)
+  const into = (period: number): string => `-${(phase % period).toFixed(2)}s`
   const grass = Array.from({ length: 140 }, () => {
     const x = Math.round(rand() * 960)
     const h = Math.round(12 + rand() * 30)
@@ -121,7 +129,7 @@ const buildRow = (isWorking: boolean): string => {
     const x = Math.round(380 + rand() * 600)
     const dx = -Math.round(120 + rand() * 220)
     const dur = (7 + rand() * 6).toFixed(1)
-    const delay = (-rand() * 12).toFixed(1)
+    const delay = (-((rand() * 12 + phase) % Number(dur))).toFixed(2)
     const s = (0.7 + rand() * 0.7).toFixed(2)
     const c = LEAF_COLORS[Math.floor(rand() * LEAF_COLORS.length)]
     return `<g class="fall" style="--x:${x}px;--dx:${dx}px;animation-duration:${dur}s;animation-delay:${delay}s"><g transform="scale(${s})"><path class="spin" d="${MAPLE}" fill="${c}"/></g></g>`
@@ -138,13 +146,13 @@ const buildRow = (isWorking: boolean): string => {
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 ${BAR_H}" width="960" height="${BAR_H}">
 <style>
-  .ring { transform-origin: ${CX}px ${CY}px; animation: turn 2.6s linear infinite; }
+  .ring { transform-origin: ${CX}px ${CY}px; animation: turn 2.6s linear ${into(2.6)} infinite; }
   @keyframes turn { to { transform: rotate(360deg) } }
   .fall { animation: fall 10s linear infinite; }
   @keyframes fall { from { transform: translate(var(--x), -14px) } to { transform: translate(calc(var(--x) + var(--dx)), ${BAR_H + 12}px) } }
-  .spin { transform-box: fill-box; transform-origin: center; animation: spin 3.5s linear infinite; }
+  .spin { transform-box: fill-box; transform-origin: center; animation: spin 3.5s linear ${into(3.5)} infinite; }
   @keyframes spin { to { transform: rotate(360deg) } }
-  .grass { transform-origin: 0 ${BAR_H}px; animation: sway 5s ease-in-out infinite; }
+  .grass { transform-origin: 0 ${BAR_H}px; animation: sway 5s ease-in-out ${into(5)} infinite; }
   @keyframes sway { 0%,100% { transform: skewX(0deg) } 50% { transform: skewX(-3deg) } }
 </style>
 <defs>
@@ -191,16 +199,40 @@ ${isWorking ? `<circle class="ring" cx="${CX}" cy="${CY}" r="76" fill="none" str
      (its strokes fill about 234 of its 272 px, so x 363 puts their middle at 480)
      and in the blank area's height. -->
 <image href="${NAME_IMAGE}" x="176" y="13" width="149" height="134" filter="url(#ink)"/>
-<image href="${LINE_IMAGE}" x="363" y="65" width="272" height="34" filter="url(#ink)"/>
+${
+  // While the ring turns (from the prompt until the reply is whole) the line is
+  // 管理员，我在画画, at the same glyph size and centred on the same middle, x 480.
+  isWorking
+    ? `<image href="${WORKING_LINE_IMAGE}" x="381" y="62.9" width="198" height="38.25" filter="url(#ink)"/>`
+    : `<image href="${LINE_IMAGE}" x="348.4" y="62.9" width="306" height="38.25" filter="url(#ink)"/>`
+}
 </svg>`
 }
 
-const BAND_IDLE = buildRow(false)
-const BAND_WORKING = buildRow(true)
 
+// The band's drawing for now. One drawing is kept for up to half a second, so a burst
+// of redraws shares it; a later one is built at the clock's phase and the leaves fall on.
+const BAND_KEEP_MS = 500
+let bandEpoch: number | undefined
+let bandKept: { isWorking: boolean; at: number; source: string } | undefined
+const bandSource = (isWorking: boolean, now: number): string => {
+  bandEpoch ??= now
+  if (bandKept === undefined || bandKept.isWorking !== isWorking || now - bandKept.at >= BAND_KEEP_MS) {
+    bandKept = { isWorking, at: now, source: buildRow(isWorking, (now - bandEpoch) / 1000) }
+  }
+  return bandKept.source
+}
+
+// Your autumn picture as a sharp, slowly drifting scene (hooks/backdrop-scene.ts), with
+// the sidebar and chat panels laid over it as one clear veil.
+const SCENE = 'ladysi-drift'
 const LOOK: ThemeSetArgs = {
   colors: theme,
-  backdrop: { image: { source: 'ladysi.jpg' } },
+  // The panels (sidebar and chat alike) lie as one clear, warm veil over the picture; a
+  // soft frosted blur hazes the picture, light enough that the scenery still reads.
+  // The sidebar keeps the app's own material: neither the tint's alpha nor the opacity
+  // reaches it (both tried), so only the chat area shows the picture clearly.
+  backdrop: { scene: SCENE, glass: { blur: 12, tint: '#f6f0e2', opacity: 0.28 } },
 }
 
 // The pane's picture: the wallpaper, small enough for an SVG (131,072 characters at most).
@@ -208,6 +240,9 @@ const PANE_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 484">
 const ALT = 'LadySi wallpaper: a green-haired girl in manga ink style'
 
 type ThemeApi = { theme: { set: (a: ThemeSetArgs) => Promise<ThemeResult> } }
+
+// What the last applyLook came to, for /ladysi to say.
+let lookNote = ''
 
 // Whether the theme stands: set by applyLook, cleared by /ladysi off. While it stands,
 // the replies are in her voice too (the `prompt.compose` hook below).
@@ -231,12 +266,15 @@ const VOICE_SECTION = {
 
 // Never throws, so the command always answers.
 const applyLook = async ($: ThemeApi): Promise<ThemeResult> => {
-  themeOn = true
+  let result: ThemeResult
   try {
-    return await $.theme.set(LOOK)
+    result = await $.theme.set(LOOK)
   } catch (error) {
-    return { isDrawn: false, reason: `the theme was refused: ${String(error)}` }
+    result = { isDrawn: false, reason: `the theme was refused: ${String(error)}` }
   }
+  themeOn = true
+  lookNote = result.isDrawn ? 'backdrop: traced picture' : `not drawn: ${result.reason}`
+  return result
 }
 
 // The terminal's pictures. `auto` shows real pictures where the terminal says it
@@ -271,7 +309,272 @@ const loadPngs = ($: FsApi): Promise<Pngs | undefined> => {
 
 const hex = (color: string): number => Number.parseInt(color.slice(1), 16)
 
+// While Claude thinks, the spinner says this line, its dots growing from one to six
+// and starting over. The count lives in $.state, so each tick redraws the spinner alone.
+const THINKING_LINE = '管理员，让我想想'
+const THINKING_TICK_MS = 400
+const thinkingDots = atom({ plugin: 'ladysi', key: 'thinkingDots' } as const, 1)
+let thinkingTimer: Timer | undefined
+const stopThinkingTimer = (): void => {
+  thinkingTimer?.cancel()
+  thinkingTimer = undefined
+}
+
+// The folded tool-call line, in her words: while the group runs, and once it is done
+// with its count (and the misses, when there are any). A press unfolds it, a press
+// on the line above the rows folds it again. Which groups are open lives in $.state,
+// keyed by the group's first call.
+const GROUP_ACTIVE = '管理员，阿咬们在干活~'
+const groupDone = (done: number, failed: number): string =>
+  `阿咬们帮本大小姐干了${done}件事` + (failed > 0 ? `（${failed}件没办到，真是呆瓜！！）` : '')
+const openGroups = atom({ plugin: 'ladysi', key: 'openGroups' } as const, [] as OpenGroups)
+
+
+// The rest of the status lines, in the same voice.
+// The spinner while not thinking. On the desktop `word` says what the step is doing
+// (`Creating notes.md`), so she keeps it; the terminal's word is a random verb.
+const spinnerLine = (mode: string, word: string, surface: string): string | undefined => {
+  switch (mode) {
+    case 'requesting':
+      return '本大小姐在给管理员传信'
+    case 'responding':
+      return '本大小姐亲自执笔中'
+    case 'tool-use':
+    case 'tool-input':
+      return surface === 'terminal' || word === 'Working' ? GROUP_ACTIVE : `阿咬们在跑腿：${word}`
+    default:
+      return undefined
+  }
+}
+
+// `3s`, `1m 4s`, `1h 2m`, as the engine's own line formats it.
+const formatDuration = (ms: number): string => {
+  const s = Math.max(0, Math.round(ms / 1000))
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ${s % 60}s`
+  return `${Math.floor(m / 60)}h ${m % 60}m`
+}
+const turnDoneLine = (ms: number): string => `本大小姐忙活了 ${formatDuration(ms)}，哼，才不是为了管理员呢`
+
+// The prompt's hint line: the parts she knows are said her way, the rest kept.
+const HINT_WORDS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/\?\s*for shortcuts/i, '? 看看本大小姐的快捷键'],
+  [/esc to interrupt/i, 'esc 叫本大小姐停手'],
+  [/esc to cancel/i, 'esc 不干了'],
+]
+const voiceHint = (hint: string): string => HINT_WORDS.reduce((text, [from, to]) => text.replace(from, to), hint)
+
+// The run-in-background pill: `(ctrl+b to run in background)`, the key as bound.
+const voiceBackground = (hint: string): string => {
+  const key = /\(?\s*(.+?)\s+to run in background\s*\)?/i.exec(hint)?.[1]
+  return key ? `（${key} 让阿咬们去后台慢慢干）` : hint
+}
+
+// A single tool row's title, in her words, from the tool and what it was given.
+const clip = (text: string, max = 60): string => {
+  const one = text.replace(/\s+/g, ' ').trim()
+  return one.length > max ? one.slice(0, max - 1) + '…' : one
+}
+const field = (input: unknown, key: string): string => {
+  const value = typeof input === 'object' && input !== null ? (input as Record<string, unknown>)[key] : undefined
+  return typeof value === 'string' ? value : ''
+}
+const baseName = (path: string): string => path.split(/[\\/]/).filter(Boolean).pop() ?? path
+const hostOf = (url: string): string => /^[a-z]+:\/\/([^/]+)/i.exec(url)?.[1] ?? url
+const toolTitle = (tool: string, input: unknown): string => {
+  switch (tool) {
+    case 'Bash':
+    case 'PowerShell':
+      return `差阿咬去跑命令：${clip(field(input, 'description') || field(input, 'command'))}`
+    case 'Read':
+      return `本大小姐翻阅了 ${baseName(field(input, 'file_path'))}`
+    case 'Edit':
+    case 'MultiEdit':
+    case 'NotebookEdit':
+      return `本大小姐提笔改了 ${baseName(field(input, 'file_path') || field(input, 'notebook_path'))}`
+    case 'Write':
+      return `本大小姐落笔写下 ${baseName(field(input, 'file_path'))}`
+    case 'Grep':
+      return `阿咬们去找「${clip(field(input, 'pattern'), 40)}」`
+    case 'Glob':
+      return `阿咬们翻箱倒柜找 ${clip(field(input, 'pattern'), 40)}`
+    case 'WebFetch':
+      return `阿咬出门取来 ${hostOf(field(input, 'url'))} 的东西`
+    case 'WebSearch':
+      return `阿咬们去打听「${clip(field(input, 'query'), 40)}」`
+    case 'Agent':
+    case 'Task':
+      return `派了一只阿咬去办：${clip(field(input, 'description'))}`
+    default:
+      if (tool.startsWith('mcp__')) {
+        return `阿咬们借来 ${tool.split('__').pop()} 用了用`
+      }
+      return `阿咬们用了 ${tool}`
+  }
+}
+
+// Under a single tool row that failed or was stopped.
+const ERRORED_LINE = '这件没办到，阿咬真是呆瓜！！'
+const INTERRUPTED_LINE = '被管理员叫停了……哼，停就停'
+
 export const register: Register = on => {
+  // The dots tick only while a turn runs.
+  on('turn.start', async ($, e, next) => {
+    stopThinkingTimer()
+    thinkingTimer = $.clock.every(THINKING_TICK_MS, () => {
+      void update($, thinkingDots, n => ((n ?? 1) % 6) + 1)
+    })
+    return next(e)
+  })
+  on('turn.complete', async ($, e, next) => {
+    stopThinkingTimer()
+    return next(e)
+  })
+
+  on('session.end', async ($, e, next) => {
+    stopThinkingTimer()
+    return next(e)
+  })
+
+  // The spinner's words while thinking: 管理员，让我想想. up to 管理员，让我想想......
+  on('ui.render', { component: 'Spinner' }, async ($, e, next) => {
+    if (e.props.mode !== 'thinking') {
+      const line = spinnerLine(e.props.mode, e.props.word, e.surface)
+      return line === undefined ? next(e) : next({ ...e, props: { ...e.props, message: line } })
+    }
+    const dots = await read($, thinkingDots)
+    return next({ ...e, props: { ...e.props, message: THINKING_LINE + '.'.repeat(dots), suffix: '' } })
+  })
+
+  // A pixel 祀 at the prompt's bottom-right: the hint line under the prompt keeps
+  // its own words on the left, and she stands at its right end.
+  on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
+    // The terminal's line keeps its live pills, so its words stay the engine's.
+    if (e.surface !== 'desktop' && e.surface !== 'mobile') {
+      return next(e)
+    }
+    const ui = $.ui.resolve(e)
+    const said = voiceHint(e.props.hint)
+    const voiced = said === e.props.hint ? e : { ...e, props: { ...e.props, hint: said } }
+    if (!('Svg' in ui)) {
+      return next(voiced)
+    }
+    const { Box, Svg } = ui
+    const hint = await next(voiced)
+    return (
+      <Box key="si-hint" flexDirection="row" alignItems="flex-end" width="100%">
+        <Box flexGrow={1} flexShrink={1}>
+          {hint}
+        </Box>
+        <Box key="pixel-si" flexShrink={0} marginLeft={1}>
+          <Svg
+            source={e.props.isWorking ? PIXEL_SI_WORKING : PIXEL_SI_IDLE}
+            alt="像素祀"
+            width={134}
+            height={58}
+            isInteractive
+          />
+        </Box>
+      </Box>
+    )
+  })
+
+  // The line that closes a turn (`Baked for 3s`), terminal only.
+  on('ui.render', { component: 'TurnDuration' }, async ($, e, next) => {
+    if (e.props.isExpanded || e.props.waitingFor !== undefined) {
+      return next(e)
+    }
+    const { Text } = $.ui.resolve(e)
+    return (
+      <Text key="ladysi-turn-done" dimColor>
+        {'※ ' + turnDoneLine(e.props.durationMs)}
+      </Text>
+    )
+  })
+
+  // The run-in-background pill under a running call, terminal only.
+  on('ui.render', { component: 'ToolProgress' }, async ($, e, next) => {
+    if (e.props.kind !== 'background_hint') {
+      return next(e)
+    }
+    return next({ ...e, props: { ...e.props, hint: voiceBackground(e.props.hint) } })
+  })
+
+  // A single tool row: her title in its place, a press shows the engine's row (the
+  // command, the output, the diff) under it, and a failed or stopped call gets her
+  // remark. The ctrl+o transcript shows the row open.
+  on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
+    const { tool, input, isRunning, isErrored, isInterrupted, tool_use_id: id } = e.props
+    const remark = isInterrupted ? INTERRUPTED_LINE : isErrored ? ERRORED_LINE : undefined
+    const open = e.props.isExpanded === true || (await read($, openGroups)).includes(id)
+    const { Box, Button, Text } = $.ui.resolve(e)
+    const title = toolTitle(tool, input) + (isRunning ? '……' : '')
+    return (
+      <Box key={`ladysi-tool-${id}`} flexDirection="column">
+        <Button
+          key={`ladysi-tool-title-${id}`}
+          label={(open ? '▾ ' : '▸ ') + title}
+          plain
+          dimColor
+          onPress={() => {
+            void update($, openGroups, ids =>
+              (ids ?? []).includes(id) ? (ids ?? []).filter(x => x !== id) : [...(ids ?? []).slice(-49), id],
+            )
+          }}
+        />
+        {remark === undefined ? null : (
+          <Text key={`ladysi-tool-remark-${id}`} dimColor color={RED}>
+            {remark}
+          </Text>
+        )}
+        {open ? await next(e) : null}
+      </Box>
+    )
+  })
+
+  // 「正在运行命令」/「已运行 X 个命令（Y 个失败）」 in her words.
+  on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => {
+    const { calls, isActive, isExpanded } = e.props
+    // The ctrl+o transcript and --verbose already show every row.
+    if (isExpanded) {
+      return next(e)
+    }
+    // Leave groups that also hold other rows (recalled memory, hook timing) alone,
+    // unless a call failed: then the line must say so.
+    const failed = calls.filter(c => c.isErrored || c.isInterrupted).length
+    if (e.props.isCallsOnly === false && failed === 0) {
+      return next(e)
+    }
+    const id = calls[0]?.tool_use_id ?? `group-${calls.length}`
+    const open = (await read($, openGroups)).includes(id)
+    const { Box, Button } = $.ui.resolve(e)
+    const label = isActive ? GROUP_ACTIVE : groupDone(calls.length, failed)
+    const toggle = (
+      <Button
+        key={`ladysi-group-${id}`}
+        label={(open ? '▾ ' : '▸ ') + label}
+        plain
+        dimColor
+        onPress={() => {
+          void update($, openGroups, ids =>
+            (ids ?? []).includes(id) ? (ids ?? []).filter(x => x !== id) : [...(ids ?? []).slice(-49), id],
+          )
+        }}
+      />
+    )
+    if (!open) {
+      return toggle
+    }
+    const rows = await next({ ...e, props: { ...e.props, isExpanded: true } })
+    return (
+      <Box key={`ladysi-group-box-${id}`} flexDirection="column">
+        {toggle}
+        {rows}
+      </Box>
+    )
+  })
+
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'ladysi',
@@ -295,11 +598,9 @@ export const register: Register = on => {
     if (unpainted !== undefined) {
       $.ui.toast(`LadySi: ${unpainted}`)
     }
-    const result = await applyLook($)
-    if (!result.isDrawn) {
-      // The app can't draw themes yet: show her beside the chat instead.
-      void $.ui.open({ id: PANE, title: PANE_TITLE })
-    }
+    // The pane opens only when asked for (/ladysi pane): the theme stands and draws once
+    // the app attaches, even where this answers "not drawn" at the start.
+    await applyLook($)
 
     return next(e)
   })
@@ -338,15 +639,16 @@ export const register: Register = on => {
       return { text: 'LadySi removed for this session. Run /ladysi to bring her back.' }
     }
     const result = await applyLook($)
-    if (result.isDrawn && !/^\s*pane\s*$/i.test(e.args)) {
-      $.ui.toast('LadySi ✦')
-      return { text: 'LadySi theme on.' }
+    if (!/^\s*pane\s*$/i.test(e.args)) {
+      if (result.isDrawn) $.ui.toast('LadySi ✦')
+      return { text: `LadySi theme on (${lookNote}).` }
     }
     const opened = await $.ui.open({ id: PANE, title: PANE_TITLE })
     return {
-      text: opened.isPlaced
-        ? 'LadySi opened in a pane.'
-        : 'No surface could place the LadySi pane right now.',
+      text:
+        (opened.isPlaced
+          ? 'LadySi opened in a pane.'
+          : 'No surface could place the LadySi pane right now.') + ` (${lookNote})`,
     }
   })
 
@@ -387,6 +689,19 @@ export const register: Register = on => {
     )
   })
 
+  // The moving backdrop behind the conversation.
+  on('ui.render', { component: 'Backdrop' }, ($, e, next) => {
+    if ((e.surface !== 'desktop' && e.surface !== 'mobile') || e.props.scene !== SCENE) {
+      return next(e)
+    }
+    const ui = $.ui.resolve(e)
+    if (!('Svg' in ui)) {
+      return next(e)
+    }
+    const { Svg } = ui
+    return <Svg source={BACKDROP_SCENE} alt="An autumn hilltop: grey cliffs, a red maple, golden grass and a white bench" />
+  })
+
   // The portrait row above the prompt.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.props.hasSurvey) {
@@ -401,10 +716,11 @@ export const register: Register = on => {
       const faceColumns = faceRows * 2
       // Too little room for the picture row: one line of text instead.
       if (faceRows < 8 || e.props.bodyColumns < faceColumns + 24) {
+        const said = LINE
         return (
           <Text color={working ? TEAL : undefined}>
             {working ? '◐ ' : '✦ '}
-            <Text bold color={RED}>祀</Text> · {LINE}
+            <Text bold color={RED}>祀</Text> · {said}
           </Text>
         )
       }
@@ -439,7 +755,7 @@ export const register: Register = on => {
 
     return (
       <Svg
-        source={e.props.isWorking ? BAND_WORKING : BAND_IDLE}
+        source={bandSource(e.props.isWorking, await $.clock.now())}
         alt={e.props.isWorking ? 'LadySi strip, working' : 'LadySi strip'}
       />
     )
