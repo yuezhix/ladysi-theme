@@ -2,8 +2,10 @@ import type { Register, ThemeResult, ThemeSetArgs } from 'claude-code'
 
 import { makeColors } from './make-colors.js'
 import { AUTUMN_IMAGE, FACE_IMAGE, LINE_IMAGE, NAME_IMAGE, PANE_IMAGE } from './pane-image'
+import { FACE_SIZE, autumnCells, faceCells, looksGraphical, paneCells, paneRows } from './terminal'
 
 const PANE = 'ladysi-pane'
+const LINE = '管理员，这次要答应我哦'
 const PANE_TITLE = 'LadySi'
 
 // LadySi palette, taken from the wallpaper:
@@ -213,12 +215,58 @@ const applyLook = async ($: ThemeApi): Promise<ThemeResult> => {
   }
 }
 
+// The terminal's pictures. `auto` shows real pictures where the terminal says it
+// draws pixels (kitty, Ghostty, iTerm2), and cell drawings everywhere else.
+type ImageMode = 'auto' | 'on' | 'off'
+const IMAGE_MODE_KEY = 'imageMode'
+let imageMode: ImageMode = 'auto'
+let graphical = false
+const useImages = (): boolean => imageMode === 'on' || (imageMode === 'auto' && graphical)
+
+type Pngs = { pane: string; face: string; autumn: string }
+let pngs: Promise<Pngs | undefined> | undefined
+
+type FsApi = {
+  plugin: { root: string }
+  fs: { read: (path: string, options: { as: 'bytes' }) => Promise<{ base64: string }> }
+}
+// Read once, when first needed; undefined where they cannot be read.
+const loadPngs = ($: FsApi): Promise<Pngs | undefined> => {
+  pngs ??= (async () => {
+    try {
+      const read = async (name: string) =>
+        (await $.fs.read(`${$.plugin.root}/assets/${name}`, { as: 'bytes' })).base64
+      const [pane, face, autumn] = await Promise.all([read('pane.png'), read('face.png'), read('autumn.png')])
+      return { pane, face, autumn }
+    } catch {
+      return undefined
+    }
+  })()
+  return pngs
+}
+
+const hex = (color: string): number => Number.parseInt(color.slice(1), 16)
+
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'ladysi',
-      description: 'LadySi theme: /ladysi turns it on, /ladysi pane shows the wallpaper in a pane, /ladysi off removes it',
+      description:
+        'LadySi theme: /ladysi turns it on, /ladysi pane shows the wallpaper in a pane, /ladysi off removes it, /ladysi image on|off|auto picks real pictures or cell drawings in the terminal',
     })
+    try {
+      const stored = await $.store.get(IMAGE_MODE_KEY)
+      imageMode = stored === 'on' || stored === 'off' ? stored : 'auto'
+      graphical = looksGraphical({
+        term: await $.env.get('TERM'),
+        program: await $.env.get('TERM_PROGRAM'),
+        lcTerminal: await $.env.get('LC_TERMINAL'),
+        kitty: await $.env.get('KITTY_WINDOW_ID'),
+        ghostty: await $.env.get('GHOSTTY_RESOURCES_DIR'),
+      })
+    } catch {
+      // keep the cell drawings
+    }
     const unpainted = problems.find(line => line.startsWith("Desktop won't paint"))
     if (unpainted !== undefined) {
       $.ui.toast(`LadySi: ${unpainted}`)
@@ -233,6 +281,21 @@ export const register: Register = on => {
   })
 
   on('command.run', { command: 'ladysi' }, async ($, e) => {
+    const image = /^\s*image(?:\s+(\S+))?\s*$/i.exec(e.args)
+    if (image) {
+      const want = (image[1] ?? '').toLowerCase()
+      if (want !== 'on' && want !== 'off' && want !== 'auto') {
+        return {
+          text: `Terminal pictures: ${imageMode} (now ${useImages() ? 'real pictures' : 'cell drawings'}). Use /ladysi image on, off or auto.`,
+        }
+      }
+      imageMode = want
+      await $.store.set(IMAGE_MODE_KEY, want)
+      $.ui.invalidate('ui.render')
+      return {
+        text: `Terminal pictures: ${want} (now ${useImages() ? 'real pictures, for kitty, Ghostty and iTerm2' : 'cell drawings'}).`,
+      }
+    }
     if (/^\s*off\s*$/i.test(e.args)) {
       try {
         await $.theme.clear()
@@ -257,6 +320,24 @@ export const register: Register = on => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const ui = $.ui.resolve(e)
     const { Box, Text } = ui
+    if (e.surface === 'terminal' && 'Raster' in ui && 'Image' in ui) {
+      const { Raster, Image } = ui
+      const columns = Math.max(8, Math.min(200, e.props.bodyColumns))
+      const rows = Math.min(120, paneRows(columns))
+      const png = useImages() ? await loadPngs($) : undefined
+      return (
+        <Box flexDirection="column">
+          {png ? (
+            <Image key="pane" source={{ png: png.pane }} columns={columns} rows={rows} alt={ALT} />
+          ) : (
+            <Raster key="pane" columns={columns} rows={rows} cells={paneCells(columns)} />
+          )}
+          <Text color={TEAL}>
+            ✦ 祀 · {LINE}
+          </Text>
+        </Box>
+      )
+    }
     const Svg = 'Svg' in ui ? ui.Svg : undefined
     if (!Svg) {
       return (
@@ -279,6 +360,46 @@ export const register: Register = on => {
       return next(e)
     }
     const ui = $.ui.resolve(e)
+    if (e.surface === 'terminal' && 'Raster' in ui && 'Image' in ui) {
+      const { Box, Text, Raster, Image } = ui
+      const working = e.props.isWorking
+      const faceRows = FACE_SIZE / 2
+      // Too little room for the picture row: one line of text instead.
+      if (e.props.maxRows < faceRows || e.props.bodyColumns < FACE_SIZE + 24) {
+        return (
+          <Text color={working ? TEAL : undefined}>
+            {working ? '◐ ' : '✦ '}
+            <Text bold color={RED}>祀</Text> · {LINE}
+          </Text>
+        )
+      }
+      const stripColumns = Math.min(72, e.props.bodyColumns - FACE_SIZE - 2)
+      const stripRows = faceRows - 2
+      const png = useImages() ? await loadPngs($) : undefined
+      return (
+        <Box flexDirection="row" columnGap={2}>
+          {png ? (
+            <Image key="face" source={{ png: png.face }} columns={FACE_SIZE} rows={faceRows} alt="祀" />
+          ) : (
+            <Raster key="face" columns={FACE_SIZE} rows={faceRows} cells={faceCells(hex(working ? TEAL : INK))} />
+          )}
+          <Box flexDirection="column">
+            {png ? (
+              <Image key="strip" source={{ png: png.autumn }} columns={stripColumns} rows={stripRows} alt=" " />
+            ) : (
+              <Raster key="strip" columns={stripColumns} rows={stripRows} cells={autumnCells(stripColumns, stripRows)} />
+            )}
+            <Text>
+              <Text bold color={RED}>祀</Text>
+              <Text color={TEAL}>  {LINE}</Text>
+            </Text>
+            <Text color={TEAL} dimColor={!working}>
+              {working ? '◐ 落笔中……' : '🍁 LadySi'}
+            </Text>
+          </Box>
+        </Box>
+      )
+    }
     const Svg = 'Svg' in ui ? ui.Svg : undefined
     if (!Svg) {
       return next(e)

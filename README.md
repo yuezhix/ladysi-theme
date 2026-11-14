@@ -31,6 +31,15 @@ In the desktop app, where `/plugin` does not run: click **+** next to the prompt
 | `/ladysi` | Turn the theme on |
 | `/ladysi pane` | Show the wallpaper in a pane |
 | `/ladysi off` | Remove the theme for this session |
+| `/ladysi image on\|off\|auto` | In the terminal: real pictures (`on`), cell drawings (`off`), or pick by terminal (`auto`, the default) |
+
+## In the terminal (CLI)
+
+The terminal has no SVG, so the mod draws its own versions there:
+
+- **Band above the prompt:** the round portrait, an autumn strip with the two figures, and the line. The frame turns teal and the band shows 落笔中…… while Claude works. On a short terminal it shrinks to one line.
+- **Pane:** `/ladysi pane` shows the wallpaper at the pane's width.
+- **Pictures:** kitty, Ghostty and iTerm2 3.5+ (with fullscreen rendering) show the real pictures. All other terminals, Windows Terminal included, show colored half-block cell drawings. Use `/ladysi image on` or `off` to override the choice.
 
 ## Credits
 
